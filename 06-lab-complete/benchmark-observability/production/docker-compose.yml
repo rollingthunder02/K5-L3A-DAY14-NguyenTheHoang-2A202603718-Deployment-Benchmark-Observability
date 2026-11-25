@@ -59,7 +59,7 @@ services:
   # Prometheus — thu thập & lưu metrics, đánh giá alert rules
   # ──────────────────────────────────────
   prometheus:
-    image: prom/prometheus:v3.16.0
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.16.0}
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=2d
@@ -75,7 +75,7 @@ services:
   # Grafana — dashboard (datasource + dashboard được provision sẵn)
   # ──────────────────────────────────────
   grafana:
-    image: grafana/grafana:13.2.4
+    image: ${GRAFANA_IMAGE:-grafana/grafana:13.2.4}
     ports:
       - "3000:3000"
     environment:
