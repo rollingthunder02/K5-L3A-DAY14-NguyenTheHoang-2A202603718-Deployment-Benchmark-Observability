@@ -1,21 +1,53 @@
-"""
-Cost guard (tiêu chí 8).
+"""Track shared daily and monthly LLM spend using integer nano-USD."""
 
-Yêu cầu:
-  • Cộng dồn chi phí LLM (tính theo token) vào Redis
-  • Tổng chi phí vượt DAILY_BUDGET_USD (hoặc MONTHLY_BUDGET_USD) → HTTP 402
-"""
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
-# Giá USD / 1K tokens (tham khảo gpt-4o-mini)
-PRICE_INPUT_PER_1K = 0.00015
-PRICE_OUTPUT_PER_1K = 0.0006
+from fastapi import HTTPException
 
+from .config import settings
+from .redis_client import r
 
-def check_budget() -> None:
-    """Gọi TRƯỚC khi gọi LLM. Hết budget → raise HTTPException(status_code=402)."""
-    raise NotImplementedError("TODO: check_budget")
+NANO_USD_PER_USD = 1_000_000_000
+INPUT_TOKEN_NANO_USD = 150
+OUTPUT_TOKEN_NANO_USD = 600
 
 
-def record_cost(input_tokens: int, output_tokens: int) -> float:
-    """Gọi SAU khi gọi LLM. Cộng chi phí của request vào tổng, trả về chi phí request."""
-    raise NotImplementedError("TODO: record_cost")
+def _periods(now: datetime) -> list[tuple[str, Decimal, int]]:
+    periods = []
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if settings.daily_budget_usd is not None:
+        periods.append((
+            f"day14:cost:day:{now:%Y-%m-%d}",
+            settings.daily_budget_usd,
+            int((midnight + timedelta(days=1)).timestamp()),
+        ))
+    if settings.monthly_budget_usd is not None:
+        first_of_month = midnight.replace(day=1)
+        next_month = (first_of_month + timedelta(days=32)).replace(day=1)
+        periods.append((
+            f"day14:cost:month:{now:%Y-%m}",
+            settings.monthly_budget_usd,
+            int(next_month.timestamp()),
+        ))
+    return periods
+
+
+def check_budget(now: datetime | None = None) -> None:
+    """Reject requests when an active UTC budget has already been spent."""
+    periods = _periods(now or datetime.now(timezone.utc))
+    totals = r.mget([key for key, _, _ in periods])
+    for (_, budget, _), total in zip(periods, totals):
+        if int(total or 0) >= budget * NANO_USD_PER_USD:
+            raise HTTPException(status_code=402, detail="LLM budget exhausted")
+
+
+def record_cost(input_tokens: int, output_tokens: int, now: datetime | None = None) -> float:
+    """Accumulate actual usage for the UTC periods in which the request started."""
+    cost = input_tokens * INPUT_TOKEN_NANO_USD + output_tokens * OUTPUT_TOKEN_NANO_USD
+    with r.pipeline() as transaction:
+        for key, _, expires_at in _periods(now or datetime.now(timezone.utc)):
+            transaction.incrby(key, cost)
+            transaction.expireat(key, expires_at)
+        transaction.execute()
+    return cost / NANO_USD_PER_USD

@@ -81,21 +81,26 @@ Script tự khởi động agent của bạn, gọi API thật, build và chạy
 
 ## Chạy local
 
+Với Docker Compose, tạo `.env` từ mẫu một lần rồi điền `AGENT_API_KEY` dùng riêng cho local. Compose tự đặt `REDIS_URL` để trỏ tới service `redis`.
+
 ```bash
-pip install -r requirements.txt
-cp .env.example .env
-
-# Chạy nhanh không cần Docker (cần Redis riêng nếu muốn test rate limit thật)
-AGENT_API_KEY=dev-key uvicorn app.main:app --reload
-
-# Chạy cả agent + redis
-docker compose up --build
+cp -n .env.example .env
+# Mở .env và điền AGENT_API_KEY trước khi thử /ask.
+docker compose up --build -d --wait
 
 curl http://localhost:8000/health
+curl http://localhost:8000/ready
+read -rsp 'Local API key: ' LOCAL_KEY; echo
 curl -X POST http://localhost:8000/ask \
-     -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
-     -d '{"question": "What is deployment?"}'
+  -H "X-API-Key: $LOCAL_KEY" -H 'Content-Type: application/json' \
+  -d '{"question": "What is deployment?"}'
+unset LOCAL_KEY
+docker compose down
 ```
+
+Nếu đổi `PORT` trong `.env`, gọi cổng tương ứng. Nếu chạy Uvicorn trực tiếp, cài dependencies và cấp `AGENT_API_KEY`, `REDIS_URL` qua môi trường. Stack có thể khởi động khi key còn trống. Khi đó `/ask` trả 401.
+
+Rate limit mặc định là 10 lượt/phút/key. Ngân sách mặc định là 10 USD/tháng khi chưa cấu hình hạn mức. Có thể đặt cả ngân sách ngày và tháng theo UTC. App kiểm tra tổng đã ghi trước khi gọi mock LLM và cộng chi phí sau khi có câu trả lời. Các request đang chạy đồng thời có thể làm tổng vượt ngưỡng trước khi request tiếp theo bị chặn.
 
 ---
 
